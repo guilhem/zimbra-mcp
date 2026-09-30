@@ -78,8 +78,32 @@ test('read search uses only Auth and Search, and explicitly preserves unread sta
   assert.equal(q.calls[0].options.headers.Cookie, undefined);
   assert.equal(q.calls[1].options.headers.Cookie, `ZM_AUTH_TOKEN=${TOKEN}`);
   assert.equal(q.calls[1].body.Header.context.authToken._content, TOKEN);
-  assert.equal(q.calls.every(c => c.url === 'https://mail.example.org/service/soap' && c.options.redirect === 'error'), true);
+  assert.equal(q.calls.every(c => c.url === 'https://mail.example.org/service/soap' && c.options.redirect === 'manual'), true);
   assert.equal(JSON.stringify(result).includes(TOKEN), false);
+});
+
+test('native fetch retains the global receiver in Workers runtimes', async () => {
+  const q = mockQueue(auth, { Body: { GetTagResponse: {} } });
+  function hostFetch(url, options) {
+    assert.equal(this, globalThis, 'native fetch must not receive a ZimbraReader instance');
+    return q.fetcher(url, options);
+  }
+  const result = await (await handle(call('zimbra_list_tags', {}), ENV, hostFetch)).json();
+  assert.equal(result.result.isError, false);
+  assert.equal(q.calls.length, 2);
+});
+
+test('redirects are rejected without following a Location or exposing its URL', async () => {
+  let count = 0;
+  const result = await (await handle(call('zimbra_list_tags', {}), ENV, async (_, options) => {
+    count++;
+    assert.equal(options.redirect, 'manual');
+    return new Response(null, { status: 302, headers: { Location: 'https://unapproved.invalid/?secret=never-expose' } });
+  })).json();
+  assert.equal(count, 1);
+  assert.equal(result.result.isError, true);
+  assert.match(result.result.content[0].text, /UPSTREAM_REDIRECT_BLOCKED/);
+  assert.equal(JSON.stringify(result).includes('never-expose'), false);
 });
 
 test('GetMsg has read=false, strips HTML/remote URLs and reports attachment metadata/truncation', async () => {
