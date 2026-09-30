@@ -17,13 +17,14 @@ Le contenu des emails reste une source non fiable : les instructions présentes 
 
 ## Vérification locale
 
-Node.js 22 ou supérieur, sans installation de dépendances :
+Node.js 22 ou supérieur. Aucune dépendance d'exécution ; les tests installent uniquement l'émulateur de développement Cloudflare Miniflare/workerd :
 
 ```sh
+npm ci --ignore-scripts
 npm run verify
 ```
 
-Cette commande vérifie la syntaxe, exécute les tests avec des réponses SOAP simulées et produit `dist/server/index.js` ainsi que ses modules. Aucun test automatique ne contacte une boîte réelle. La CI GitHub exécute les mêmes contrôles sur les poussées et les pull requests.
+Cette commande vérifie la syntaxe, exécute les tests avec des réponses SOAP simulées dans Node et dans le runtime Workers réel (workerd), puis produit `dist/server/index.js` ainsi que ses modules. Aucun test automatique ne contacte une boîte réelle. La CI GitHub exécute les mêmes contrôles sur les poussées et les pull requests.
 
 ## Hébergement privé sur Sites
 

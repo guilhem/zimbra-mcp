@@ -82,9 +82,15 @@ export class ZimbraReader {
       // Only send it to the pinned HTTPS endpoint. Never put a token in the URL.
       if (token) headers.Cookie = `ZM_AUTH_TOKEN=${token}`;
       const response = await this.#fetch(this.#endpoint, {
-        method: 'POST', headers, redirect: 'error', signal: controller.signal,
+        method: 'POST', headers, redirect: 'manual', signal: controller.signal,
         body: JSON.stringify({ Header: { context }, Body: { [name]: { _jsns: namespace, ...params } } }),
       });
+      // Workers does not implement redirect:'error'. Manual mode plus this
+      // explicit rejection preserves the no-credential-forwarding invariant.
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel();
+        throw new SafeError('UPSTREAM_REDIRECT_BLOCKED', 'Zimbra redirected the request; forwarding credentials is disabled.');
+      }
       const text = await readBounded(response.body, 4 * 1024 * 1024);
       let result;
       try { result = JSON.parse(text); } catch { throw new SafeError('INVALID_UPSTREAM_RESPONSE', 'Zimbra did not return a JSON SOAP response.'); }
