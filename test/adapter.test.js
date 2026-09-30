@@ -171,6 +171,16 @@ test('plain MIME alternative remains preferred over converted HTML', async () =>
   assert.equal(r.result.structuredContent.body_format, 'plain');
 });
 
+test('discarded HTML truncation does not mark a complete plain-text body truncated', async () => {
+  const q = mockQueue(auth, { Body: { GetMsgResponse: { m: [{ id: '1', mp: [
+    { ct: 'text/plain', content: 'Complete plain body' },
+    { ct: 'text/html', content: '<p>' + 'a'.repeat(101000) + '</p>', truncated: true },
+  ] }] } } });
+  const r = await (await handle(call('zimbra_get_message', { id: '1' }), ENV, q.fetcher)).json();
+  assert.equal(r.result.structuredContent.body, 'Complete plain body');
+  assert.equal(r.result.structuredContent.body_truncated, false);
+});
+
 test('expired token causes exactly one safe read retry; tokens do not reach output', async () => {
   const q = mockQueue(auth, { data: fault('service.AUTH_EXPIRED'), status: 500 }, auth, { Body: { GetTagResponse: {} } });
   const result = await (await handle(call('zimbra_list_tags', {}), ENV, q.fetcher)).json();

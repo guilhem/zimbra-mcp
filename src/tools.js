@@ -52,26 +52,27 @@ function message(data) {
   const m = array(data.m)[0];
   if (!m) throw new SafeError('MESSAGE_NOT_FOUND', 'Zimbra returned no message.');
   const bodies = []; const htmlBodies = []; const attachments = [];
-  let truncated = false;
+  let truncated = false; let plainTruncated = false; let htmlTruncated = false;
   let count = 0;
   function visit(part, depth = 0) {
     if (!part) return;
     if (depth > 15 || count++ > 200) { truncated = true; return; }
-    if (part.truncated === true || part.truncated === 1 || part.truncated === '1') truncated = true;
+    const partTruncated = part.truncated === true || part.truncated === 1 || part.truncated === '1';
     if (part.filename || part.cd === 'attachment' || part.ct === 'message/rfc822') {
       attachments.push(attrs(part, ['part', 'filename', 'ct', 's']));
       return;
     }
     if (part.ct === 'text/plain' && part.content) {
       const body = text(part.content, 100001);
-      if (body.length > 100000) truncated = true;
+      if (partTruncated || body.length > 100000) plainTruncated = true;
       bodies.push(body.slice(0, 100000));
     }
     if (part.ct === 'text/html' && part.content) {
       const converted = htmlToText(text(part.content, 500001));
       htmlBodies.push(converted.text);
-      if (converted.truncated) truncated = true;
+      if (partTruncated || converted.truncated) htmlTruncated = true;
     }
+    if (partTruncated && String(part.ct ?? '').startsWith('multipart/')) truncated = true;
     for (const child of array(part.mp)) {
       if (count >= 200) { truncated = true; break; }
       visit(child, depth + 1);
@@ -84,7 +85,8 @@ function message(data) {
   const plain = bodies.join('\n\n');
   const usedHtml = !plain.trim() && htmlBodies.length > 0;
   const body = usedHtml ? htmlBodies.join('\n\n') : plain;
-  return { ...summary(m), body: body.slice(0, 100000), attachments, body_truncated: truncated || body.length > 100000,
+  return { ...summary(m), body: body.slice(0, 100000), attachments,
+    body_truncated: truncated || (usedHtml ? htmlTruncated : plainTruncated) || body.length > 100000,
     body_format: usedHtml ? 'html_text' : bodies.length ? 'plain' : 'none',
     body_note: usedHtml ? 'Text extracted from HTML without rendering, script execution or resource fetching.' :
       bodies.length ? 'Plain text only; no remote content fetched.' : 'No readable text body supplied by Zimbra. Binary content is not exposed.' };
