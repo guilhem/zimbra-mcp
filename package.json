@@ -1,0 +1,15 @@
+{
+  "name": "zimbra-mcp-private",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Owner-only, read-only Zimbra SOAP MCP adapter for managed Workers hosting",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "check": "node --check src/worker.js && node --check src/zimbra.js && node --check src/tools.js",
+    "test": "node --test",
+    "build": "node scripts/build.mjs",
+    "verify": "npm run check && npm test && npm run build"
+  }
+}

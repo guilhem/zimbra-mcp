@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+.sites-runtime/
+*.log
+*.tar.gz
+coverage/
