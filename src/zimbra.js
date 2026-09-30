@@ -66,7 +66,9 @@ export class ZimbraReader {
     this.#endpoint = soapEndpoint(env.ZIMBRA_URL);
     this.#user = env.ZIMBRA_USER;
     this.#password = env.ZIMBRA_PASSWORD;
-    this.#fetch = fetchImpl;
+    // Native Worker fetch requires the global receiver. Calling a stored
+    // function as this.#fetch(...) otherwise passes this reader as `this`.
+    this.#fetch = fetchImpl.bind(globalThis);
   }
 
   async #send(name, namespace, params, token) {

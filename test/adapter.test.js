@@ -82,6 +82,17 @@ test('read search uses only Auth and Search, and explicitly preserves unread sta
   assert.equal(JSON.stringify(result).includes(TOKEN), false);
 });
 
+test('native fetch retains the global receiver in Workers runtimes', async () => {
+  const q = mockQueue(auth, { Body: { GetTagResponse: {} } });
+  function hostFetch(url, options) {
+    assert.equal(this, globalThis, 'native fetch must not receive a ZimbraReader instance');
+    return q.fetcher(url, options);
+  }
+  const result = await (await handle(call('zimbra_list_tags', {}), ENV, hostFetch)).json();
+  assert.equal(result.result.isError, false);
+  assert.equal(q.calls.length, 2);
+});
+
 test('GetMsg has read=false, strips HTML/remote URLs and reports attachment metadata/truncation', async () => {
   const q = mockQueue(auth, { Body: { GetMsgResponse: { m: [{ id: '123', su: 'A message', mp: [{ ct: 'multipart/mixed', mp: [
     { ct: 'text/plain', content: 'Hi', truncated: true }, { ct: 'text/html', content: '<img src="https://tracking.invalid/pixel">' },
