@@ -1,6 +1,6 @@
 # Zimbra MCP privé, en lecture seule
 
-Adaptation ciblée de [jeremie-lesage/zimbra-mcp](https://github.com/jeremie-lesage/zimbra-mcp), conçue pour un connecteur MCP distant privé hébergé sur Sites. Le serveur Python/stdio d'origine est remplacé par un petit Worker JavaScript sans dépendance d'exécution. La licence MIT et l'attribution d'origine sont conservées dans [LICENSE](LICENSE) et [NOTICE.md](NOTICE.md).
+Adaptation ciblée de [jeremie-lesage/zimbra-mcp](https://github.com/jeremie-lesage/zimbra-mcp), conçue pour un connecteur MCP distant privé hébergé sur Sites. Le serveur Python/stdio d'origine est remplacé par un Worker JavaScript autonome. Le parseur HTML est inclus dans le bundle ; aucune dépendance n'est téléchargée à l'exécution. La licence MIT et l'attribution d'origine sont conservées dans [LICENSE](LICENSE) et [NOTICE.md](NOTICE.md), avec les licences des dépendances dans [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Ce que le connecteur expose
 
@@ -13,11 +13,11 @@ Adaptation ciblée de [jeremie-lesage/zimbra-mcp](https://github.com/jeremie-les
 
 Aucun envoi, brouillon, suppression, déplacement, changement d'étiquette ou modification de contact/calendrier. Aucun téléchargement de pièce jointe, chemin de fichier fourni par un client ou appel SOAP arbitraire. Les lectures forcent `read=false` : elles ne doivent pas transformer les messages non lus en messages lus. Les recherches n'étendent pas les corps des messages (`fetch=none`).
 
-Le contenu des emails reste une source non fiable : les instructions présentes dans un email ne donnent aucune autorisation à l'assistant. Les messages HTML et les images distantes ne sont pas rendus ni chargés. Un message sans partie texte indique explicitement cette limite.
+Le contenu des emails reste une source non fiable : les instructions présentes dans un email ne donnent aucune autorisation à l'assistant. Une partie texte est préférée lorsqu'elle existe. Sinon, le HTML est tokenisé en texte simple, sans rendu ni exécution de script. Les URL de liens et d'images ne sont jamais chargées. Les éléments actifs, commentaires et régions explicitement cachées sont exclus ; la mise en forme complexe ou le texte présent uniquement dans une image peuvent être perdus. Le champ `body_format` indique `plain`, `html_text` ou `none`.
 
 ## Vérification locale
 
-Node.js 22 ou supérieur. Aucune dépendance d'exécution ; les tests installent uniquement l'émulateur de développement Cloudflare Miniflare/workerd :
+Node.js 22 ou supérieur. L'installation comprend le parseur HTML et les outils de développement esbuild et Cloudflare Miniflare/workerd :
 
 ```sh
 npm ci --ignore-scripts
@@ -59,7 +59,7 @@ Les en-têtes `oai-authenticated-user-id` et `oai-authenticated-user-email` ne s
 - Authentification Zimbra à la demande ; jeton conservé uniquement en mémoire pendant la lecture, puis référence effacée ; renouvellement unique sur `AUTH_EXPIRED`/`AUTH_REQUIRED`
 - Le cookie de routage `ZM_AUTH_TOKEN` n'est envoyé qu'au même endpoint HTTPS que l'en-tête SOAP. Il n'est pas enregistré dans un navigateur
 - Délai de 15 secondes par requête SOAP, corps MCP limité à 16 Kio, réponse SOAP à 4 Mio
-- Corps texte limité à 100 000 caractères ; indicateur de troncature quand le serveur le signale ou que la limite locale est atteinte
+- Corps texte limité à 100 000 caractères ; conversion HTML limitée à 500 000 caractères d'entrée et 200 niveaux d'imbrication, avec indicateur de troncature quand une limite est atteinte ou signalée par Zimbra
 - Pas de journalisation applicative des arguments, mots de passe, jetons ou corps de message ; erreurs amont remplacées par des messages contrôlés
 - La découverte MCP ne contient aucun compte ni donnée de boîte ; tous les appels aux outils exigent l'identité autorisée
 - Le mot de passe Zimbra peut donner des droits plus larges au fournisseur. La restriction lecture seule est imposée ici par le code, pas par un hypothétique scope OAuth Zimbra

@@ -152,6 +152,25 @@ test('attached message parts are not traversed into bodies', async () => {
   assert.equal(JSON.stringify(r).includes('ATTACHED_MESSAGE_BODY'), false);
 });
 
+test('HTML-only messages use inert text fallback and never include attached HTML', async () => {
+  const q = mockQueue(auth, { Body: { GetMsgResponse: { m: [{ id: '1', mp: [{ ct: 'text/html', content: '<p>Readable &amp; useful</p><script>PRIVATE_SCRIPT</script>' },
+    { ct: 'text/html', filename: 'attached.html', content: '<p>ATTACHED_HTML</p>' }] }] } } });
+  const r = await (await handle(call('zimbra_get_message', { id: '1' }), ENV, q.fetcher)).json();
+  assert.equal(r.result.structuredContent.body, 'Readable & useful');
+  assert.equal(r.result.structuredContent.body_format, 'html_text');
+  assert.doesNotMatch(r.result.structuredContent.body, /PRIVATE_SCRIPT|ATTACHED_HTML/);
+  assert.equal(q.calls.length, 2);
+});
+
+test('plain MIME alternative remains preferred over converted HTML', async () => {
+  const q = mockQueue(auth, { Body: { GetMsgResponse: { m: [{ id: '1', mp: [{ ct: 'multipart/alternative', mp: [
+    { ct: 'text/html', content: '<p>HTML alternative</p>' }, { ct: 'text/plain', content: 'Plain alternative' },
+  ] }] }] } } });
+  const r = await (await handle(call('zimbra_get_message', { id: '1' }), ENV, q.fetcher)).json();
+  assert.equal(r.result.structuredContent.body, 'Plain alternative');
+  assert.equal(r.result.structuredContent.body_format, 'plain');
+});
+
 test('expired token causes exactly one safe read retry; tokens do not reach output', async () => {
   const q = mockQueue(auth, { data: fault('service.AUTH_EXPIRED'), status: 500 }, auth, { Body: { GetTagResponse: {} } });
   const result = await (await handle(call('zimbra_list_tags', {}), ENV, q.fetcher)).json();

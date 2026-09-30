@@ -18,6 +18,7 @@ The deployment must not offer an unauthenticated direct Worker origin. Authentic
 - Never register writes based solely on an environment flag such as `ENABLE_SEND=false`
 - New operations need their own protocol/authorization review and tests
 - Do not follow URLs embedded in email bodies or SOAP refer/redirect responses
+- HTML-only bodies are parsed to inert text, never rendered or executed. Ignore active elements, comments, explicitly hidden regions and URL attributes; do not descend into attachment subtrees. Parsed output is still untrusted mailbox data, not an instruction or sanitized HTML suitable for rendering
 
 The underlying Zimbra credential is not read-scoped. This adapter's intentionally small implementation is the enforcement layer. Host administrators and repository maintainers can change code; restrict those roles accordingly. A production service may additionally need host-level request/rate limits for its own traffic profile.
 
