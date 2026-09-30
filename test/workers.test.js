@@ -11,7 +11,7 @@ const auth = { Body: { AuthResponse: { authToken: [{ _content: 'fixture-token' }
 function runtime(t, outboundService) {
   const mf = new Miniflare({ rootPath, modulesRoot: rootPath, modules: true,
     modulesRules: [{ type: 'ESModule', include: ['**/*.js'] }],
-    compatibilityDate: '2025-07-18', scriptPath: 'src/worker.js', bindings, outboundService });
+    compatibilityDate: '2025-07-18', scriptPath: 'dist/server/index.js', bindings, outboundService });
   t.after(() => mf.dispose());
   return mf;
 }
@@ -68,4 +68,22 @@ test('workerd: unauthenticated calls cannot reach the upstream', async t => {
   const r = await invoke(mf, 'zimbra_list_tags', {}, false);
   assert.equal(r.status, 401);
   assert.equal(calls, 0);
+});
+
+test('workerd: deployed bundle extracts HTML-only text with no resource fetch', async t => {
+  let calls = 0;
+  const mf = runtime(t, async request => {
+    calls++;
+    assert.equal(request.url, 'https://fixture.invalid/service/soap');
+    const { Body } = await request.json();
+    if (Body.AuthRequest) return Response.json(auth);
+    assert.equal(Body.GetMsgRequest.m.read, false);
+    return Response.json({ Body: { GetMsgResponse: { m: [{ id: '1', mp: [{ ct: 'text/html',
+      content: '<p>Fixture HTML &amp; text</p><img src="https://tracking.invalid/pixel"><script>HIDDEN_SCRIPT</script>' }] }] } } });
+  });
+  const r = await invoke(mf, 'zimbra_get_message', { id: '1' });
+  assert.equal(r.body.result.isError, false);
+  assert.equal(r.body.result.structuredContent.body, 'Fixture HTML & text');
+  assert.equal(r.body.result.structuredContent.body_format, 'html_text');
+  assert.equal(calls, 2);
 });

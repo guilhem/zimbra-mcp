@@ -9,12 +9,16 @@
     "node": ">=22"
   },
   "scripts": {
-    "check": "node --check src/worker.js && node --check src/zimbra.js && node --check src/tools.js",
-    "test": "node --test",
+    "check": "node --check src/worker.js && node --check src/zimbra.js && node --check src/tools.js && node --check src/html-text.js",
+    "test": "npm run build && node --test",
     "build": "node scripts/build.mjs",
     "verify": "npm run check && npm test && npm run build"
   },
   "devDependencies": {
+    "esbuild": "0.25.12",
     "miniflare": "3.20250718.3"
+  },
+  "dependencies": {
+    "htmlparser2": "10.0.0"
   }
 }

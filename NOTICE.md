@@ -10,6 +10,8 @@ Les correspondances d'opérations SOAP et la conception initiale du connecteur p
 
 Cette adaptation est un port ciblé, pas une promesse de compatibilité avec tous les outils du projet d'origine. Elle garde la recherche, la lecture des messages, les dossiers et les étiquettes ; elle exclut explicitement les mutations et les téléchargements. Le transport stdio Python devient HTTP JSON sur un runtime Workers géré.
 
+La conversion des messages uniquement HTML utilise le tokenizer de htmlparser2, inclus dans le bundle autonome. Voir `THIRD_PARTY_NOTICES.md` pour les licences et attributions des dépendances.
+
 ## Références primaires de vérification
 
 - [Protocole SOAP Zimbra](https://github.com/Zimbra/zm-mailbox/blob/develop/store/docs/soap.txt)
