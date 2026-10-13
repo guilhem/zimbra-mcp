@@ -8,6 +8,8 @@
 4. Only the configured public HTTPS Zimbra endpoint receives authentication credentials. Redirects, SOAP referral following and token-bearing query strings are disabled.
 5. Mail and SOAP responses are untrusted. Only selected response fields are returned; upstream fault text, authentication responses and tokens are never returned by tools.
 
+The official MCP SDK validates the protocol; strict Zod schemas validate tool arguments and provide their TypeScript types. The HTTP gateway bounds the raw body and checks the owner identity before handing tool calls to the SDK. Each request gets a fresh stateless server and transport. Tool callbacks sanitize errors before the SDK can serialize them. The Workers-compatible JSON Schema validator avoids runtime code generation.
+
 The deployment must not offer an unauthenticated direct Worker origin. Authentication is not supplied by trusting arbitrary client headers on a public server. A service bypass that lacks a real authenticated user identity cannot call mailbox tools. Discovery and health responses contain no mailbox contents or credentials.
 
 ## Read and write invariants

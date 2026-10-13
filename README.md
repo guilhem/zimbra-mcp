@@ -2,7 +2,7 @@
 
 This private MCP connector lets an assistant search and read your own Zimbra mailbox, with optional writes enabled only by explicit owner approval. It is intended for mailbox owners and operators hosting the connector on a private Site.
 
-It is a focused adaptation of [jeremie-lesage/zimbra-mcp](https://github.com/jeremie-lesage/zimbra-mcp) for a private remote MCP connector hosted on Sites. The original Python/stdio server is replaced by a self-contained JavaScript Worker. The HTML parser is bundled; no dependencies are downloaded at runtime. The original MIT license and attribution are preserved in [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md), with dependency licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+It is a focused adaptation of [jeremie-lesage/zimbra-mcp](https://github.com/jeremie-lesage/zimbra-mcp) for a private remote MCP connector hosted on Sites. The original Python/stdio server is replaced by a Worker written in strict TypeScript. The official MCP SDK handles the protocol, Zod defines and validates tool arguments, and htmlparser2 extracts inert text. All runtime dependencies are bundled into JavaScript; no dependencies are downloaded at runtime. The original MIT license and attribution are preserved in [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md), with dependency licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Read-only access is the default. Write tools require the owner to enable them explicitly through runtime configuration.
 
@@ -48,14 +48,18 @@ See [RELEASE_WRITE_ACCESS.md](RELEASE_WRITE_ACCESS.md) for the validation, activ
 
 ## Local verification
 
-Requires Node.js 22 or newer. Installation includes the HTML parser and the esbuild and Cloudflare Miniflare/workerd development tools:
+Requires Node.js 22.18.0 or newer. Node runs the TypeScript build script and tests directly; esbuild produces the deployable JavaScript Worker:
 
 ```sh
 npm ci --ignore-scripts
 npm run verify
 ```
 
-The verification command checks syntax, runs tests with simulated SOAP responses in Node and the actual Workers runtime (workerd), then produces `dist/server/index.js` with its bundled modules. No automated test contacts a real mailbox. GitHub CI runs the same checks on pushes and pull requests.
+The verification command checks types in the source, build script and tests, builds `dist/server/index.js`, and runs tests with simulated SOAP responses in Node and the actual Workers runtime (workerd). No automated test contacts a real mailbox. GitHub CI runs the same checks on Node 22.18.0 and Node 24, plus a dependency audit, on pushes and pull requests.
+
+Tool argument types, runtime validation and advertised JSON Schemas share the same strict Zod definitions. Unknown properties are rejected. Type checking supplements the runtime checks on untrusted MCP requests and Zimbra responses; it does not replace them.
+
+Miniflare's `sharp` and `undici` dependencies are pinned to patched versions through scoped npm overrides. Recheck these overrides when upgrading Miniflare and run the complete Worker tests before removing them.
 
 ## Private hosting on Sites
 
@@ -101,7 +105,9 @@ This project alone does not establish compatibility with an OVH account, its 2FA
 
 ## Protocol
 
-The server supports MCP versions `2025-11-25` and `2025-06-18`. There are no server sessions, SSE streams, resources or prompts. The catalog contains four read-only tools, or fourteen tools when writes are enabled. `GET /mcp` returns 405 because this mode does not provide an SSE stream. Any supplied `Origin` must exactly match the Site origin.
+The official MCP SDK negotiates protocol versions, including `2025-11-25` and `2025-06-18`, and validates JSON-RPC messages. There are no server sessions, SSE streams, resources or prompts. The catalog contains four read-only tools, or fourteen tools when writes are enabled. `GET /mcp` returns 405 because this mode does not provide an SSE stream. Any supplied `Origin` must exactly match the Site origin.
+
+POST requests require `Content-Type: application/json` and `Accept: application/json, text/event-stream`, as required by Streamable HTTP. Initialization includes `protocolVersion`, `capabilities` and `clientInfo`. Invalid tool arguments and unknown tools return the SDK's tool error result (`isError: true`); malformed protocol requests return JSON-RPC errors. JSON-RPC batches are rejected. A fresh SDK server and transport handle each request, keeping mailbox configuration and authenticated identity isolated between requests.
 
 Zimbra exchanges use JSON SOAP `Header` / `Body` envelopes with `_jsns` namespaces. SOAP errors are decoded even on HTTP 500. JSON responses served as `text/javascript` are accepted for Zimbra compatibility.
 

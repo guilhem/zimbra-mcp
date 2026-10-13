@@ -7,15 +7,15 @@ const BLOCK = new Set(['address', 'article', 'aside', 'blockquote', 'div', 'dl',
 
 // Tokenization only: no DOM, browser, scripts, styles, URL resolution or fetch.
 // The returned string remains untrusted mailbox data, not sanitized HTML.
-export function htmlToText(html, limit = 100000) {
+export function htmlToText(html: string, limit = 100000): { text: string; truncated: boolean } {
   const source = String(html);
   const input = source.slice(0, 500000);
-  const stack = [];
-  const output = [];
+  const stack: { name: string; hidden: boolean }[] = [];
+  const output: string[] = [];
   let length = 0;
   let truncated = input.length < source.length;
-  let parser;
-  function append(value) {
+  let parser: Parser;
+  function append(value: string) {
     if (!value) return;
     const remaining = limit - length;
     if (value.length > remaining) {
