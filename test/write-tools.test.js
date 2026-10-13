@@ -78,13 +78,54 @@ test('successful sends without a saved copy need no message ID and still reserve
 });
 
 test('missing or malformed send messages and ID-less drafts remain ambiguous', async () => {
-  for (const m of [undefined, null, [], '', 'invalid', 1]) {
+  for (const m of [undefined, null, [], '', 'invalid', 1, [{}, {}], [{}, { id: '42' }]]) {
     const q = queue(auth, soap('SendMsg', { m }));
     errorCode(await invoke('zimbra_send_message', send(), q), 'WRITE_OUTCOME_UNKNOWN');
     assert.equal(q.calls.length, 2);
   }
   const q = queue(auth, soap('SaveDraft', { m: [{}] }));
   errorCode(await invoke('zimbra_save_draft', compose(), q), 'WRITE_OUTCOME_UNKNOWN');
+});
+
+test('ID-less send success requires an empty message node', async () => {
+  for (const node of [{ id: null }, { error: 'unexpected' }, { cid: '12' }, { secret: token }]) {
+    for (const m of [node, [node]]) {
+      const q = queue(auth, soap('SendMsg', { m }));
+      const r = await invoke('zimbra_send_message', send(), q);
+      errorCode(r, 'WRITE_OUTCOME_UNKNOWN');
+      assert.equal(q.calls.length, 2);
+      assert.doesNotMatch(JSON.stringify(r), /WRITE_TEST_TOKEN/);
+    }
+  }
+});
+
+test('write confirmations reject malformed identifiers and accept numeric scalar IDs', async () => {
+  const operations = [
+    ['zimbra_send_message', send, 'SendMsg', 'm', []],
+    ['zimbra_save_draft', compose, 'SaveDraft', 'm', []],
+    ['zimbra_create_folder', () => ({ name: 'Example', parent_id: '1' }), 'CreateFolder', 'folder', [auth, soap('GetFolder', { folder: { id: '1' } })]],
+    ['zimbra_create_tag', () => ({ name: 'Example' }), 'CreateTag', 'tag', []],
+    ['zimbra_set_read', () => ({ ids: ['42'], read: true }), 'MsgAction', 'action', []],
+  ];
+  for (const [name, args, op, field, preflight] of operations) {
+    for (const id of ['', false, {}, [], null, '0', '01', 'invalid', 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const q = queue(...preflight, auth, soap(op, { [field]: { id } }));
+      errorCode(await invoke(name, args(), q), 'WRITE_OUTCOME_UNKNOWN');
+    }
+    const q = queue(...preflight, auth, soap(op, { [field]: { id: 42 } }));
+    const r = await invoke(name, args(), q);
+    assert.equal(r.result.isError, false); assert.equal(r.result.structuredContent.id, '42');
+  }
+  for (const id of ['42,,43', '42,invalid', '42,0', Array(51).fill('42').join(',')]) {
+    const q = queue(auth, soap('MsgAction', { action: { id } }));
+    errorCode(await invoke('zimbra_set_read', { ids: ['42'], read: true }, q), 'WRITE_OUTCOME_UNKNOWN');
+  }
+  const q = queue(auth, soap('SaveDraft', { m: { id: '42,43' } }));
+  errorCode(await invoke('zimbra_save_draft', compose(), q), 'WRITE_OUTCOME_UNKNOWN');
+  const ids = Array.from({ length: 50 }, (_, i) => String(i + 1));
+  const batch = queue(auth, soap('MsgAction', { action: { id: ids.join(',') } }));
+  const r = await invoke('zimbra_set_read', { ids, read: true }, batch);
+  assert.equal(r.result.structuredContent.completed, true); assert.deepEqual(r.result.structuredContent.affected_ids, ids);
 });
 
 test('reply reads original without marking read and never infers recipients', async () => {

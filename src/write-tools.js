@@ -87,7 +87,9 @@ function requirePlainDraft(m, env) {
 }
 function changed(data, expected, fallback) {
   const node = first(data[expected]);
-  if (!node || typeof node !== 'object' || node.id == null) throw new SafeError('WRITE_OUTCOME_UNKNOWN', 'Zimbra did not return the changed item identifiers. Check the mailbox; do not repeat the write automatically.');
+  const identifier = node?.id;
+  const pattern = fallback.ids ? /^[1-9][0-9]{0,19}(?:,[1-9][0-9]{0,19}){0,49}$/ : new RegExp(id.pattern);
+  if (!node || typeof node !== 'object' || (typeof identifier !== 'string' && !Number.isSafeInteger(identifier)) || !pattern.test(String(identifier))) throw new SafeError('WRITE_OUTCOME_UNKNOWN', 'Zimbra did not return the changed item identifiers. Check the mailbox; do not repeat the write automatically.');
   const result = { completed: true, ...fallback };
   if (fallback.ids) {
     const affected = String(node.id).split(',');
@@ -149,7 +151,7 @@ export async function callWriteTool(name, args, env, fetchImpl) {
       const data = await client.sendMessage(m, a.send_uid);
       const sent = first(data.m);
       // Zimbra returns an empty message when the account does not save sent mail.
-      result = sent && typeof sent === 'object' && !Array.isArray(sent) && sent.id == null
+      result = sent && typeof sent === 'object' && !Array.isArray(sent) && Object.keys(sent).length === 0 && (!Array.isArray(data.m) || data.m.length === 1)
         ? { completed: true, send_uid: a.send_uid }
         : changed(data, 'm', { send_uid: a.send_uid });
       break;
