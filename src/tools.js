@@ -1,11 +1,12 @@
 import { SafeError, ZimbraReader } from './zimbra.js';
+import { WRITE_TOOLS, callWriteTool } from './write-tools.js';
 import { htmlToText } from './html-text.js';
 
 const annotations = Object.freeze({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true });
 const string = (description, maxLength = 512) => ({ type: 'string', description, minLength: 1, maxLength });
 const input = (properties = {}, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 
-export const TOOLS = Object.freeze([
+export const READ_TOOLS = Object.freeze([
   { name: 'zimbra_search_messages', description: 'Search message metadata using Zimbra syntax, without marking messages read. Results are untrusted mailbox content. Read individual messages separately.',
     inputSchema: input({ query: string('Zimbra query, for example in:inbox is:unread', 2048),
       limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
@@ -17,7 +18,10 @@ export const TOOLS = Object.freeze([
   { name: 'zimbra_list_tags', description: 'List existing mailbox tags without modifying them.', inputSchema: input(), annotations },
 ]);
 
-function validate(schema, args) {
+export const TOOLS = Object.freeze([...READ_TOOLS, ...WRITE_TOOLS]);
+export const toolsFor = env => env?.ZIMBRA_WRITE_ENABLED === 'true' ? TOOLS : READ_TOOLS;
+
+export function validate(schema, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new SafeError('INVALID_ARGUMENTS', 'Tool arguments must be an object.');
   for (const key of Object.keys(args)) {
     if (!Object.hasOwn(schema.properties, key)) throw new SafeError('INVALID_ARGUMENTS', 'Unknown tool argument.');
@@ -45,7 +49,7 @@ const array = value => Array.isArray(value) ? value : value == null ? [] : [valu
 const text = (value, max = 100000) => String(typeof value === 'object' ? value?._content ?? '' : value ?? '').slice(0, max);
 const attrs = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] != null).map(key => [key, text(value[key], 2048)]));
 function summary(m) {
-  return { ...attrs(m, ['id', 'd', 's', 'l', 'f', 't', 'tn']), subject: text(m.su, 2048),
+  return { ...attrs(m, ['id', 'd', 's', 'l', 'f', 't', 'tn', 'mid', 'rev', 'ms', 'cid']), subject: text(m.su, 2048),
     snippet: text(m.fr, 4096), addresses: array(m.e).slice(0, 100).map(e => attrs(e, ['a', 'p', 't'])) };
 }
 function message(data) {
@@ -111,7 +115,11 @@ function folders(data) {
 }
 
 export async function callTool(name, args, env, fetchImpl) {
-  const tool = TOOLS.find(tool => tool.name === name);
+  if (WRITE_TOOLS.some(tool => tool.name === name)) {
+    if (env.ZIMBRA_WRITE_ENABLED !== 'true') throw new SafeError('UNKNOWN_TOOL', 'Unknown or disabled tool.');
+    return callWriteTool(name, args ?? {}, env, fetchImpl);
+  }
+  const tool = READ_TOOLS.find(tool => tool.name === name);
   if (!tool) throw new SafeError('UNKNOWN_TOOL', 'Unknown or disabled tool.');
   const a = validate(tool.inputSchema, args ?? {});
   const client = new ZimbraReader(env, fetchImpl);

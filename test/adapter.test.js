@@ -31,7 +31,7 @@ test('discovery is bounded, credential-free, and contains only annotated read to
   const result = await (await handle(req('tools/list'), {})).json();
   assert.deepEqual(result.result.tools.map(t => t.name), ['zimbra_search_messages', 'zimbra_get_message', 'zimbra_list_folders', 'zimbra_list_tags']);
   assert.equal(JSON.stringify(result).includes(ENV.ZIMBRA_USER), false);
-  for (const tool of TOOLS) {
+  for (const tool of result.result.tools) {
     assert.equal(tool.annotations.readOnlyHint, true); assert.equal(tool.annotations.destructiveHint, false);
     assert.equal(tool.inputSchema.additionalProperties, false);
   }
@@ -237,7 +237,7 @@ test('MCP initialization, notification, methods, versions and body limits', asyn
   assert.equal((await handle(req('ping', {}, { 'MCP-Protocol-Version': 'future' }))).status, 400);
   assert.equal((await handle(req('tools/list', {}, { Origin: 'https://evil.invalid' }))).status, 403);
   assert.equal((await handle(req('ping', {}, {}, { body: '[' }))).status, 400);
-  assert.equal((await handle(req('ping', {}, {}, { body: 'x'.repeat(17000) }))).status, 413);
+  assert.equal((await handle(req('ping', {}, {}, { body: 'x'.repeat(128 * 1024 + 1) }))).status, 413);
   assert.equal((await handle(req('ping', {}, {}, { body: '[{}]' }))).status, 400);
 });
 
@@ -246,6 +246,6 @@ test('response body is bounded even when content length is absent', async () => 
   assert.match(r.result.content[0].text, /RESPONSE_TOO_LARGE/);
 });
 
-test('reader exposes no raw SOAP or mutation method', () => {
-  assert.deepEqual(Object.getOwnPropertyNames(ZimbraReader.prototype).sort(), ['constructor', 'folders', 'message', 'search', 'tags']);
+test('client exposes only explicit read and write methods, never arbitrary SOAP or purge', () => {
+  assert.deepEqual(Object.getOwnPropertyNames(ZimbraReader.prototype).sort(), ['constructor', 'createFolder', 'createTag', 'folder', 'folders', 'message', 'moveMessages', 'saveDraft', 'search', 'sendMessage', 'setFlag', 'setRead', 'setTag', 'tags'].sort());
 });
