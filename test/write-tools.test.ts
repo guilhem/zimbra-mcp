@@ -1,41 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { handle } from '../src/worker.js';
-import { WRITE_TOOLS, callWriteTool } from '../src/write-tools.js';
-import { ZimbraReader } from '../src/zimbra.js';
+import { handle } from '../src/worker.ts';
+import { WRITE_TOOLS, callWriteTool } from '../src/write-tools.ts';
+import { ZimbraReader } from '../src/zimbra.ts';
+import type { Env } from '../src/zimbra.ts';
+import { MCP_ACCEPT, recordCall } from './fixtures.ts';
+import type { RecordedCall } from './fixtures.ts';
 
 const env = { MCP_AUTH_MODE: 'sites', MCP_ALLOWED_USER_ID: 'write-fixture-owner', ZIMBRA_WRITE_ENABLED: 'true',
-  ZIMBRA_URL: 'https://write-fixture.invalid', ZIMBRA_USER: 'owner@example.org', ZIMBRA_PASSWORD: 'WRITE_TEST_PASSWORD' };
+  ZIMBRA_URL: 'https://write-fixture.invalid', ZIMBRA_USER: 'owner@example.org', ZIMBRA_PASSWORD: 'WRITE_TEST_PASSWORD' } satisfies Env;
 const token = 'WRITE_TEST_TOKEN';
 const auth = { Body: { AuthResponse: { authToken: token } } };
-const soap = (name, value) => ({ Body: { [name + 'Response']: value } });
-const original = (m = {}) => soap('GetMsg', { m: [{ id: '42', l: '2', mid: '<original@example.org>', ...m }] });
-const draft = (m = {}) => original({ f: 'd', rev: '7', ms: '7', mp: [{ ct: 'text/plain', content: 'old' }], ...m });
+const soap = (name: string, value: unknown) => ({ Body: { [name + 'Response']: value } });
+const original = (m: Record<string, unknown> = {}) => soap('GetMsg', { m: [{ id: '42', l: '2', mid: '<original@example.org>', ...m }] });
+const draft = (m: Record<string, unknown> = {}) => original({ f: 'd', rev: '7', ms: '7', mp: [{ ct: 'text/plain', content: 'old' }], ...m });
 const compose = () => ({ to: ['to@example.org'], cc: ['cc@example.org'], bcc: ['bcc@example.org'], subject: 'Exact subject', body: 'Exact body\nSecond line' });
 const send = () => ({ ...compose(), send_uid: randomUUID() });
-function queue(...responses) {
-  const calls = [];
-  return { calls, fetch: async (url, options) => {
-    const body = JSON.parse(options.body); calls.push({ url, options, body });
+function queue(...responses: unknown[]) {
+  const calls: RecordedCall[] = [];
+  return { calls, fetch: async (url: Parameters<typeof fetch>[0], options?: RequestInit) => {
+    calls.push(recordCall(url, options));
     assert.ok(responses.length, 'Unexpected upstream call');
     const value = responses.shift();
     if (value instanceof Error) throw value;
     return value instanceof Response ? value : Response.json(value);
   } };
 }
-async function invoke(name, args, q, config = env, identity = env.MCP_ALLOWED_USER_ID) {
+async function invoke(name: string, args: unknown, q: { fetch: typeof fetch }, config: Env = env, identity: string | null = env.MCP_ALLOWED_USER_ID) {
   const r = await handle(new Request('https://adapter.invalid/mcp', { method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(identity ? { 'oai-authenticated-user-id': identity } : {}) },
+    headers: { 'Content-Type': 'application/json', Accept: MCP_ACCEPT, ...(identity ? { 'oai-authenticated-user-id': identity } : {}) },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) }), config, q.fetch);
   return { status: r.status, ...(await r.json()) };
 }
-const operation = q => q.calls.map(c => Object.keys(c.body.Body)[0]);
-const errorCode = (r, code) => { assert.equal(r.result?.isError, true, JSON.stringify(r)); assert.match(r.result.content[0].text, new RegExp(code)); };
+const operation = (q: { calls: RecordedCall[] }) => q.calls.map(c => Object.keys(c.body.Body)[0]);
+const errorCode = (r: { result?: { isError?: boolean; content: { text: string }[] } }, code: string) => { assert.equal(r.result?.isError, true, JSON.stringify(r)); assert.match(r.result!.content[0]!.text, new RegExp(code)); };
 
 test('write discovery requires exact owner enablement; schemas explicitly annotate all mutations', async () => {
   for (const enabled of [undefined, false, true, 'TRUE', 'false', 'true']) {
-    const r = await handle(new Request('https://adapter.invalid/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const r = await handle(new Request('https://adapter.invalid/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: MCP_ACCEPT },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }), { ...env, ZIMBRA_WRITE_ENABLED: enabled });
     assert.equal((await r.json()).result.tools.length, enabled === 'true' ? 14 : 4);
   }
@@ -46,7 +49,7 @@ test('write discovery requires exact owner enablement; schemas explicitly annota
 test('every write is owner-gated and disabled client/tool entry points fail before fetch', async () => {
   const q = queue();
   for (const tool of WRITE_TOOLS) {
-    for (const [identity, status] of [[null, 401], ['other-owner', 403]]) assert.equal((await invoke(tool.name, {}, q, env, identity)).status, status);
+    for (const [identity, status] of [[null, 401], ['other-owner', 403]] satisfies [string | null, number][]) assert.equal((await invoke(tool.name, {}, q, env, identity)).status, status);
     await assert.rejects(callWriteTool(tool.name, {}, { ...env, ZIMBRA_WRITE_ENABLED: 'false' }, q.fetch), { code: 'WRITE_DISABLED' });
   }
   await assert.rejects(new ZimbraReader({ ...env, ZIMBRA_WRITE_ENABLED: false }, q.fetch).sendMessage({}, randomUUID()), { code: 'WRITE_DISABLED' });
@@ -58,7 +61,7 @@ test('send transmits only exact explicit recipients and plain content with manda
   const r = await invoke('zimbra_send_message', a, q);
   assert.equal(r.result.isError, false);
   assert.deepEqual(operation(q), ['AuthRequest', 'SendMsgRequest']);
-  assert.deepEqual(q.calls[1].body.Body.SendMsgRequest, { _jsns: 'urn:zimbraMail', suid: a.send_uid, m: {
+  assert.deepEqual(q.calls[1]!.body.Body.SendMsgRequest, { _jsns: 'urn:zimbraMail', suid: a.send_uid, m: {
     e: [{ t: 't', a: 'to@example.org' }, { t: 'c', a: 'cc@example.org' }, { t: 'b', a: 'bcc@example.org' }],
     su: { _content: a.subject }, mp: [{ ct: 'text/plain', content: { _content: a.body } }] } });
   assert.equal(r.result.structuredContent.id, '81');
@@ -99,8 +102,20 @@ test('ID-less send success requires an empty message node', async () => {
   }
 });
 
+test('an own __proto__ confirmation member cannot become an ID-less send success', async () => {
+  const message = JSON.parse('{"__proto__":{"polluted":true}}');
+  assert.equal(Object.hasOwn(message, '__proto__'), true);
+  const args = send();
+  const q = queue(auth, soap('SendMsg', { m: message }));
+  errorCode(await invoke('zimbra_send_message', args, q), 'WRITE_OUTCOME_UNKNOWN');
+  assert.deepEqual(operation(q), ['AuthRequest', 'SendMsgRequest']);
+  const unused = queue();
+  errorCode(await invoke('zimbra_send_message', args, unused), 'SEND_UID_REUSED');
+  assert.equal(unused.calls.length, 0);
+});
+
 test('write confirmations reject malformed identifiers and shapes and accept scalar IDs', async () => {
-  const operations = [
+  const operations: [string, () => unknown, string, string, unknown[]][] = [
     ['zimbra_send_message', send, 'SendMsg', 'm', []],
     ['zimbra_save_draft', compose, 'SaveDraft', 'm', []],
     ['zimbra_create_folder', () => ({ name: 'Example', parent_id: '1' }), 'CreateFolder', 'folder', [auth, soap('GetFolder', { folder: { id: '1' } })]],
@@ -138,8 +153,8 @@ test('reply reads original without marking read and never infers recipients', as
   const a = { ...send(), to: ['explicit@example.org'], cc: [], bcc: [], reply_to_message_id: '42' };
   const q = queue(auth, original({ e: [{ a: 'unrequested@example.org', t: 'f' }] }), auth, soap('SendMsg', { m: [{ id: '82' }] }));
   const r = await invoke('zimbra_send_message', a, q); assert.equal(r.result.isError, false);
-  const m = q.calls[3].body.Body.SendMsgRequest.m;
-  assert.equal(q.calls[1].body.Body.GetMsgRequest.m.read, false);
+  const m = q.calls[3]!.body.Body.SendMsgRequest.m;
+  assert.equal(q.calls[1]!.body.Body.GetMsgRequest.m.read, false);
   assert.deepEqual(m.e, [{ t: 't', a: 'explicit@example.org' }]);
   assert.equal(m.origid, '42'); assert.equal(m.rt, 'r'); assert.deepEqual(m.irt, { _content: '<original@example.org>' });
   for (const mid of [null, '', 'bad\r\ninjection']) {
@@ -153,6 +168,18 @@ test('attempted send UUID cannot be reused after success or ambiguous failure', 
     const first = await invoke('zimbra_send_message', a, q); if (failure) errorCode(first, 'WRITE_OUTCOME_UNKNOWN');
     const unused = queue(); errorCode(await invoke('zimbra_send_message', a, unused), 'SEND_UID_REUSED'); assert.equal(unused.calls.length, 0);
   }
+});
+
+test('concurrent submissions of one send UUID issue exactly one mutation', async () => {
+  const args = send();
+  const q = queue(auth, soap('SendMsg', { m: [{ id: '83' }] }));
+  const results = await Promise.all([
+    invoke('zimbra_send_message', args, q),
+    invoke('zimbra_send_message', args, q),
+  ]);
+  assert.deepEqual(results.map(result => result.result.isError).sort(), [false, true]);
+  errorCode(results.find(result => result.result.isError), 'SEND_UID_REUSED');
+  assert.deepEqual(operation(q), ['AuthRequest', 'SendMsgRequest']);
 });
 
 test('writes are never retried for auth expiration, faults, network errors, redirects or malformed responses', async () => {
@@ -170,18 +197,18 @@ test('draft creation allows empty recipients and never sends', async () => {
   const q = queue(auth, soap('SaveDraft', { m: [{ id: '91', rev: '1' }] }));
   const r = await invoke('zimbra_save_draft', { ...compose(), to: [], cc: [], bcc: [] }, q);
   assert.equal(r.result.isError, false); assert.deepEqual(operation(q), ['AuthRequest', 'SaveDraftRequest']);
-  assert.deepEqual(q.calls[1].body.Body.SaveDraftRequest.m.e, []);
+  assert.deepEqual(q.calls[1]!.body.Body.SaveDraftRequest.m.e, []);
 });
 
 test('draft update verifies ID, draft flag, revision, and MIME content before replacing', async () => {
   const args = { ...compose(), draft_id: '42', expected_modseq: '7' };
   const q = queue(auth, draft(), auth, soap('SaveDraft', { m: [{ id: '42', rev: '8' }] }));
   const r = await invoke('zimbra_save_draft', args, q); assert.equal(r.result.isError, false);
-  assert.equal(q.calls[3].body.Body.SaveDraftRequest.m.id, '42');
-  assert.equal(q.calls[1].body.Body.GetMsgRequest.m.wantModSeq, true);
-  assert.deepEqual(q.calls[3].body.Header.context.change, { token: '7', type: 'mod' });
+  assert.equal(q.calls[3]!.body.Body.SaveDraftRequest.m.id, '42');
+  assert.equal(q.calls[1]!.body.Body.GetMsgRequest.m.wantModSeq, true);
+  assert.deepEqual(q.calls[3]!.body.Header.context.change, { token: '7', type: 'mod' });
   for (const [m, code] of [[{ id: '43' }, 'MESSAGE_NOT_FOUND'], [{ f: '' }, 'NOT_A_DRAFT'], [{ ms: '8' }, 'DRAFT_CHANGED'],
-    [{ mp: [{ ct: 'text/html' }] }, 'DRAFT_CONTENT_UNSUPPORTED'], [{ mp: [{ ct: 'text/plain', filename: 'attachment.txt' }] }, 'DRAFT_CONTENT_UNSUPPORTED']]) {
+    [{ mp: [{ ct: 'text/html' }] }, 'DRAFT_CONTENT_UNSUPPORTED'], [{ mp: [{ ct: 'text/plain', filename: 'attachment.txt' }] }, 'DRAFT_CONTENT_UNSUPPORTED']] satisfies [Record<string, unknown>, string][]) {
     const bad = queue(auth, draft(m)); errorCode(await invoke('zimbra_save_draft', args, bad), code); assert.equal(bad.calls.length, 2);
   }
 });
@@ -221,21 +248,21 @@ test('draft replacement accepts complete plain text including explicit empty con
 test('trash preflights every item then uses move to folder 3, never trash/delete/purge', async () => {
   const q = queue(auth, original(), auth, original({ id: '43' }), auth, soap('MsgAction', { action: { id: '42,43', op: 'move' } }));
   const r = await invoke('zimbra_trash_messages', { ids: ['42', '43'] }, q); assert.equal(r.result.isError, false);
-  assert.deepEqual(q.calls[5].body.Body.MsgActionRequest.action, { id: '42,43', op: 'move', l: '3' });
+  assert.deepEqual(q.calls[5]!.body.Body.MsgActionRequest.action, { id: '42,43', op: 'move', l: '3' });
   const bad = queue(auth, original(), auth, original({ id: '43', l: '3' }));
   errorCode(await invoke('zimbra_trash_messages', { ids: ['42', '43'] }, bad), 'ALREADY_IN_TRASH'); assert.equal(bad.calls.length, 4);
   const notDraft = queue(auth, original()); errorCode(await invoke('zimbra_delete_draft', { draft_id: '42' }, notDraft), 'NOT_A_DRAFT');
   const good = queue(auth, draft(), auth, soap('MsgAction', { action: { id: '42' } })); assert.equal((await invoke('zimbra_delete_draft', { draft_id: '42' }, good)).result.isError, false);
-  assert.deepEqual(good.calls[3].body.Body.MsgActionRequest.action, { id: '42', op: 'move', l: '3' });
+  assert.deepEqual(good.calls[3]!.body.Body.MsgActionRequest.action, { id: '42', op: 'move', l: '3' });
 });
 
 test('move, read, flag, tag and creation map only allowlisted SOAP operations', async () => {
-  const cases = [
+  const cases: [string, { ids?: string[]; folder_id?: string; parent_id?: string; read?: boolean; flagged?: boolean; tag_id?: string; add?: boolean; name?: string; color?: number }, string, Record<string, unknown>][] = [
     ['zimbra_move_messages', { ids: ['42', '43'], folder_id: '100' }, 'MsgAction', { action: { id: '42,43', op: 'move', l: '100' } }],
     ...[true, false].flatMap(v => [
       ['zimbra_set_read', { ids: ['42'], read: v }, 'MsgAction', { action: { id: '42', op: v ? 'read' : '!read' } }],
       ['zimbra_set_flag', { ids: ['42'], flagged: v }, 'MsgAction', { action: { id: '42', op: v ? 'flag' : '!flag' } }],
-      ['zimbra_set_tag', { ids: ['42'], tag_id: '5', add: v }, 'MsgAction', { action: { id: '42', op: v ? 'tag' : '!tag', t: '5' } }]]),
+      ['zimbra_set_tag', { ids: ['42'], tag_id: '5', add: v }, 'MsgAction', { action: { id: '42', op: v ? 'tag' : '!tag', t: '5' } }]] satisfies [string, { ids: string[]; read?: boolean; flagged?: boolean; tag_id?: string; add?: boolean }, string, Record<string, unknown>][]),
     ['zimbra_create_folder', { name: 'Archive', parent_id: '1' }, 'CreateFolder', { folder: { name: 'Archive', l: '1', view: 'message' } }],
     ['zimbra_create_tag', { name: 'Project', color: 127 }, 'CreateTag', { tag: { name: 'Project', color: 127 } }],
     ['zimbra_create_tag', { name: 'Plain' }, 'CreateTag', { tag: { name: 'Plain' } }],
@@ -246,28 +273,42 @@ test('move, read, flag, tag and creation map only allowlisted SOAP operations', 
     const field = op === 'MsgAction' ? 'action' : op === 'CreateFolder' ? 'folder' : 'tag';
     const q = queue(...prefix, auth, soap(op, { [field]: { id: args.ids?.join(',') ?? '101' } })); assert.equal((await invoke(name, args, q)).result.isError, false);
     assert.deepEqual(operation(q), [...(preflight ? ['AuthRequest', 'GetFolderRequest'] : []), 'AuthRequest', op + 'Request']);
-    assert.deepEqual(q.calls.at(-1).body.Body[op + 'Request'], { _jsns: 'urn:zimbraMail', ...expected });
+    assert.deepEqual(q.calls.at(-1)!.body.Body[op + 'Request'], { _jsns: 'urn:zimbraMail', ...expected });
   }
 });
 
 test('malformed, nested, ambiguous and injected inputs fail before authentication', async () => {
   const a = send();
-  const cases = [
-    ...[undefined, 'not-a-uuid', '00000000-0000-0000-0000-000000000000'].map(send_uid => ['zimbra_send_message', { ...a, send_uid }]),
+  const cases: [string, unknown][] = [
+    ...[undefined, 'not-a-uuid', '00000000-0000-0000-0000-000000000000'].map((send_uid): [string, unknown] => ['zimbra_send_message', { ...a, send_uid }]),
     ...[{ to: [] , cc: [], bcc: [] }, { to: ['Display <x@example.org>'] }, { to: ['x@example.org\r\nBcc: y@example.org'] },
       { to: [['nested@example.org']] }, { to: [{ a: 'x@example.org' }] }, { cc: ['TO@example.org'] }, { subject: 'header\r\ninjection' }, { body: 'x'.repeat(50001) },
       { body: 'bad\u0000value' }, { attachments: [] }, { from: 'spoof@example.org' }, { reply_to_message_id: 'a:42' },
-      { e: [{ t: 'b', a: 'hidden@example.org' }] }].map(p => ['zimbra_send_message', { ...a, ...p }]),
+      { e: [{ t: 'b', a: 'hidden@example.org' }] }].map((p): [string, unknown] => ['zimbra_send_message', { ...a, ...p }]),
     ['zimbra_save_draft', { ...compose(), draft_id: '42' }], ['zimbra_save_draft', { ...compose(), expected_modseq: '7' }],
-    ...[[], ['42', '42'], ['42,43'], ['a:42'], ['0'], [42], [null], Array(51).fill('42')].map(ids => ['zimbra_set_read', { ids, read: true }]),
+    ...[[], ['42', '42'], ['42,43'], ['a:42'], ['0'], [42], [null], Array(51).fill('42')].map((ids): [string, unknown] => ['zimbra_set_read', { ids, read: true }]),
     ['zimbra_set_read', { ids: ['42'], read: 'true' }], ['zimbra_set_flag', { ids: ['42'], flagged: null }],
     ['zimbra_set_tag', { ids: ['42'], tag_id: '1,2', add: true }],
-    ...['1', '3', '4', '5'].map(folder_id => ['zimbra_move_messages', { ids: ['42'], folder_id }]),
-    ...['../Archive', 'A/B', 'A\\B', 'A\nB', ''].map(name => ['zimbra_create_folder', { name, parent_id: '1' }]),
-    ...[-1, 128, 1.5, '2'].map(color => ['zimbra_create_tag', { name: 'Tag', color }]),
+    ...['1', '3', '4', '5'].map((folder_id): [string, unknown] => ['zimbra_move_messages', { ids: ['42'], folder_id }]),
+    ...['../Archive', 'A/B', 'A\\B', 'A\nB', ''].map((name): [string, unknown] => ['zimbra_create_folder', { name, parent_id: '1' }]),
+    ...[-1, 128, 1.5, '2'].map((color): [string, unknown] => ['zimbra_create_tag', { name: 'Tag', color }]),
     ['zimbra_trash_messages', { ids: ['42'], op: 'delete' }], ['zimbra_set_read', []], ['zimbra_set_read', null],
   ];
-  for (const [name, args] of cases) { const q = queue(); const r = await invoke(name, args, q); assert.equal(r.error?.code, -32602, JSON.stringify({ name, args, r })); assert.equal(q.calls.length, 0); }
+  for (const [name, args] of cases) {
+    const q = queue(); const r = await invoke(name, args, q);
+    if (args === null || Array.isArray(args)) assert.equal(r.error?.code, -32602, JSON.stringify({ name, args, r }));
+    else assert.equal(r.result?.isError, true, JSON.stringify({ name, args, r }));
+    assert.equal(q.calls.length, 0);
+  }
+});
+
+test('an own __proto__ argument cannot be stripped into an allowed mutation', async () => {
+  const args: unknown = JSON.parse('{"ids":["42"],"read":true,"__proto__":{"polluted":true}}');
+  assert.ok(args && typeof args === 'object' && Object.hasOwn(args, '__proto__'));
+  const q = queue();
+  const r = await invoke('zimbra_set_read', args, q);
+  assert.equal(r.error?.code, -32602, JSON.stringify(r));
+  assert.equal(q.calls.length, 0);
 });
 
 test('atomic draft conflict is reported without retrying SaveDraft', async () => {
@@ -295,12 +336,13 @@ test('missing mutation identifiers are ambiguous and partial batch outcomes are 
 
 test('actual 15-second abort yields uncertain write outcome with no retry', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  let markStarted; const started = new Promise(resolve => { markStarted = resolve; });
-  const calls = [];
-  const q = { fetch: async (_, options) => {
-    const { Body } = JSON.parse(options.body); calls.push(Object.keys(Body)[0]);
+  let markStarted: () => void = () => assert.fail('start callback not initialized'); const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const calls: string[] = [];
+  const q: { fetch: typeof fetch } = { fetch: async (_, options) => {
+    const { Body } = recordCall(_, options).body; calls.push(Object.keys(Body)[0]!);
     if (Body.AuthRequest) return Response.json(auth);
-    return new Promise((resolve, reject) => {
+    return new Promise<Response>((_, reject) => {
+      assert.ok(options?.signal);
       options.signal.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')), { once: true });
       markStarted();
     });
@@ -315,8 +357,8 @@ test('actual 15-second abort yields uncertain write outcome with no retry', asyn
 test('request limit measures UTF-8 bytes and accepts exactly 128 KiB', async () => {
   const prefix = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
   for (const [body, expected] of [[prefix + ' '.repeat(128 * 1024 - prefix.length), 200],
-    [prefix + ' '.repeat(128 * 1024 - prefix.length + 1), 413], [prefix + 'é'.repeat(65536), 413]]) {
-    const r = await handle(new Request('https://adapter.invalid/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }), env, () => assert.fail('must not fetch'));
+    [prefix + ' '.repeat(128 * 1024 - prefix.length + 1), 413], [prefix + 'é'.repeat(65536), 413]] satisfies [string, number][]) {
+    const r = await handle(new Request('https://adapter.invalid/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: MCP_ACCEPT }, body }), env, () => assert.fail('must not fetch'));
     assert.equal(r.status, expected);
   }
 });

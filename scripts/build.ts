@@ -3,7 +3,7 @@ import { build } from 'esbuild';
 
 await rm('dist', { recursive: true, force: true });
 await mkdir('dist/server', { recursive: true });
-await build({ entryPoints: ['src/worker.js'], outfile: 'dist/server/index.js', bundle: true,
+await build({ entryPoints: ['src/worker.ts'], outfile: 'dist/server/index.js', bundle: true,
   format: 'esm', platform: 'browser', target: 'es2022', legalComments: 'eof' });
 await copyFile('THIRD_PARTY_NOTICES.md', 'dist/THIRD_PARTY_NOTICES.md');
 await copyFile('LICENSE', 'dist/LICENSE');

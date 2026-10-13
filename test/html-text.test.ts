@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { htmlToText } from '../src/html-text.js';
+import { htmlToText } from '../src/html-text.ts';
 
 test('HTML extraction decodes entities and retains readable paragraphs and table text', () => {
   const r = htmlToText('<p>Hello &amp; welcome&nbsp;!</p><p>Line<br>two &#x1F642;</p><table><tr><td>A</td><td>B</td></tr></table>');
