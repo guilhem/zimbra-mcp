@@ -99,7 +99,7 @@ test('ID-less send success requires an empty message node', async () => {
   }
 });
 
-test('write confirmations reject malformed identifiers and accept numeric scalar IDs', async () => {
+test('write confirmations reject malformed identifiers and shapes and accept scalar IDs', async () => {
   const operations = [
     ['zimbra_send_message', send, 'SendMsg', 'm', []],
     ['zimbra_save_draft', compose, 'SaveDraft', 'm', []],
@@ -112,9 +112,15 @@ test('write confirmations reject malformed identifiers and accept numeric scalar
       const q = queue(...preflight, auth, soap(op, { [field]: { id } }));
       errorCode(await invoke(name, args(), q), 'WRITE_OUTCOME_UNKNOWN');
     }
-    const q = queue(...preflight, auth, soap(op, { [field]: { id: 42 } }));
-    const r = await invoke(name, args(), q);
-    assert.equal(r.result.isError, false); assert.equal(r.result.structuredContent.id, '42');
+    for (const value of [[{ id: '42' }, {}], [{ id: '42' }, { id: '43' }], [[{ id: '42' }]], []]) {
+      const q = queue(...preflight, auth, soap(op, { [field]: value }));
+      errorCode(await invoke(name, args(), q), 'WRITE_OUTCOME_UNKNOWN');
+    }
+    for (const value of [{ id: 42 }, [{ id: 42 }]]) {
+      const q = queue(...preflight, auth, soap(op, { [field]: value }));
+      const r = await invoke(name, args(), q);
+      assert.equal(r.result.isError, false); assert.equal(r.result.structuredContent.id, '42');
+    }
   }
   for (const id of ['42,,43', '42,invalid', '42,0', Array(51).fill('42').join(',')]) {
     const q = queue(auth, soap('MsgAction', { action: { id } }));
@@ -178,6 +184,18 @@ test('draft update verifies ID, draft flag, revision, and MIME content before re
     [{ mp: [{ ct: 'text/html' }] }, 'DRAFT_CONTENT_UNSUPPORTED'], [{ mp: [{ ct: 'text/plain', filename: 'attachment.txt' }] }, 'DRAFT_CONTENT_UNSUPPORTED']]) {
     const bad = queue(auth, draft(m)); errorCode(await invoke('zimbra_save_draft', args, bad), code); assert.equal(bad.calls.length, 2);
   }
+});
+
+test('draft replacement confirmation must identify the reviewed draft', async () => {
+  const args = { ...compose(), draft_id: '42', expected_modseq: '7' };
+  for (const id of ['43', 43]) {
+    const q = queue(auth, draft(), auth, soap('SaveDraft', { m: [{ id }] }));
+    errorCode(await invoke('zimbra_save_draft', args, q), 'WRITE_OUTCOME_UNKNOWN');
+    assert.deepEqual(operation(q), ['AuthRequest', 'GetMsgRequest', 'AuthRequest', 'SaveDraftRequest']);
+  }
+  const q = queue(auth, draft(), auth, soap('SaveDraft', { m: [{ id: 42 }] }));
+  const r = await invoke('zimbra_save_draft', args, q);
+  assert.equal(r.result.isError, false); assert.equal(r.result.structuredContent.id, '42');
 });
 
 test('draft replacement refuses any plain part whose content was not returned', async () => {

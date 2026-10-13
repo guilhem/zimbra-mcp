@@ -4,7 +4,7 @@ This private MCP connector lets an assistant search and read your own Zimbra mai
 
 It is a focused adaptation of [jeremie-lesage/zimbra-mcp](https://github.com/jeremie-lesage/zimbra-mcp) for a private remote MCP connector hosted on Sites. The original Python/stdio server is replaced by a self-contained JavaScript Worker. The HTML parser is bundled; no dependencies are downloaded at runtime. The original MIT license and attribution are preserved in [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md), with dependency licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Source version **0.2.0**. Read-only access remains the default. Publishing this source does not enable writes or establish validation against a real mailbox.
+Read-only access is the default. Write tools require the owner to enable them explicitly through runtime configuration.
 
 ## Available read tools
 

@@ -85,11 +85,17 @@ function requirePlainDraft(m, env) {
   for (const part of list(m.mp)) visit(part);
   if (!plainParts) unsupported();
 }
+function confirmation(value) {
+  const nodes = list(value);
+  const node = nodes.length === 1 ? nodes[0] : undefined;
+  if (!node || typeof node !== 'object' || Array.isArray(node)) throw new SafeError('WRITE_OUTCOME_UNKNOWN', 'Zimbra did not return a single confirmation. Check the mailbox; do not repeat the write automatically.');
+  return node;
+}
 function changed(data, expected, fallback) {
-  const node = first(data[expected]);
-  const identifier = node?.id;
+  const node = confirmation(data[expected]);
+  const identifier = node.id;
   const pattern = fallback.ids ? /^[1-9][0-9]{0,19}(?:,[1-9][0-9]{0,19}){0,49}$/ : new RegExp(id.pattern);
-  if (!node || typeof node !== 'object' || (typeof identifier !== 'string' && !Number.isSafeInteger(identifier)) || !pattern.test(String(identifier))) throw new SafeError('WRITE_OUTCOME_UNKNOWN', 'Zimbra did not return the changed item identifiers. Check the mailbox; do not repeat the write automatically.');
+  if ((typeof identifier !== 'string' && !Number.isSafeInteger(identifier)) || !pattern.test(String(identifier))) throw new SafeError('WRITE_OUTCOME_UNKNOWN', 'Zimbra did not return the changed item identifiers. Check the mailbox; do not repeat the write automatically.');
   const result = { completed: true, ...fallback };
   if (fallback.ids) {
     const affected = String(node.id).split(',');
@@ -149,9 +155,9 @@ export async function callWriteTool(name, args, env, fetchImpl) {
       }
       await reserveSend(env, a.send_uid);
       const data = await client.sendMessage(m, a.send_uid);
-      const sent = first(data.m);
+      const sent = confirmation(data.m);
       // Zimbra returns an empty message when the account does not save sent mail.
-      result = sent && typeof sent === 'object' && !Array.isArray(sent) && Object.keys(sent).length === 0 && (!Array.isArray(data.m) || data.m.length === 1)
+      result = Object.keys(sent).length === 0
         ? { completed: true, send_uid: a.send_uid }
         : changed(data, 'm', { send_uid: a.send_uid });
       break;
@@ -165,7 +171,9 @@ export async function callWriteTool(name, args, env, fetchImpl) {
         if (String(original.ms) !== a.expected_modseq) throw new SafeError('DRAFT_CHANGED', 'The draft modification sequence changed. Read it again before replacing it.');
         m.id = a.draft_id;
       }
-      result = changed(await client.saveDraft(m, a.expected_modseq), 'm', {}); break;
+      result = changed(await client.saveDraft(m, a.expected_modseq), 'm', {});
+      if (a.draft_id && result.id !== a.draft_id) throw new SafeError('WRITE_OUTCOME_UNKNOWN', 'Zimbra did not confirm the requested draft. Check the mailbox; do not repeat the write automatically.');
+      break;
     }
     case 'zimbra_delete_draft': result = changed(await trash(client, [a.draft_id], true), 'action', { ids: [a.draft_id], destination_folder_id: '3', recoverable: true }); break;
     case 'zimbra_trash_messages': result = changed(await trash(client, a.ids), 'action', { ids: a.ids, destination_folder_id: '3', recoverable: true }); break;
