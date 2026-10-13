@@ -1,13 +1,14 @@
-// Read-only SOAP mappings adapted from jeremie-lesage/zimbra-mcp (MIT).
+// SOAP read mappings adapted from jeremie-lesage/zimbra-mcp (MIT).
 // See NOTICE.md for upstream provenance and deliberate differences.
 
 const MAIL = 'urn:zimbraMail';
 const ACCOUNT = 'urn:zimbraAccount';
 const ALLOWED_READS = new Set(['SearchRequest', 'GetMsgRequest', 'GetFolderRequest', 'GetTagRequest']);
+const ALLOWED_WRITES = new Set(['SendMsgRequest', 'SaveDraftRequest', 'MsgActionRequest', 'CreateFolderRequest', 'CreateTagRequest']);
 const RETRY_AUTH = new Set(['service.AUTH_EXPIRED', 'service.AUTH_REQUIRED']);
 const SAFE_CODES = new Set([...RETRY_AUTH, 'account.AUTH_FAILED', 'account.TWO_FACTOR_AUTH_REQUIRED',
   'service.PERM_DENIED', 'mail.NO_SUCH_MSG', 'mail.NO_SUCH_FOLDER', 'service.INVALID_REQUEST',
-  'service.PARSE_ERROR', 'service.UNAVAILABLE', 'service.FAILURE']);
+  'mail.MODIFY_CONFLICT', 'mail.ALREADY_EXISTS', 'mail.NO_SUCH_TAG', 'service.PARSE_ERROR', 'service.UNAVAILABLE', 'service.FAILURE']);
 
 export class SafeError extends Error {
   constructor(code, message) { super(message); this.name = 'SafeError'; this.code = code; }
@@ -58,11 +59,12 @@ function faultCode(fault) {
 }
 
 export class ZimbraReader {
-  #endpoint; #user; #password; #fetch; #token;
+  #endpoint; #user; #password; #fetch; #token; #writeEnabled;
   constructor(env, fetchImpl = fetch) {
     if (!env.ZIMBRA_URL || !env.ZIMBRA_USER || !env.ZIMBRA_PASSWORD) {
       throw new SafeError('CONFIGURATION_REQUIRED', 'Mailbox connection has not been securely configured.');
     }
+    this.#writeEnabled = env.ZIMBRA_WRITE_ENABLED === 'true';
     this.#endpoint = soapEndpoint(env.ZIMBRA_URL);
     this.#user = env.ZIMBRA_USER;
     this.#password = env.ZIMBRA_PASSWORD;
@@ -71,11 +73,12 @@ export class ZimbraReader {
     this.#fetch = fetchImpl.bind(globalThis);
   }
 
-  async #send(name, namespace, params, token) {
+  async #send(name, namespace, params, token, change) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-      const context = { _jsns: 'urn:zimbra', userAgent: { name: 'zimbra-mcp-private', version: '0.1.0' } };
+      const context = { _jsns: 'urn:zimbra', userAgent: { name: 'zimbra-mcp-private', version: '0.2.0' } };
+      if (change) context.change = change;
       if (token) context.authToken = { _content: token };
       const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
       // Some Zimbra clusters need this cookie for authenticated mailbox routing.
@@ -96,7 +99,7 @@ export class ZimbraReader {
       try { result = JSON.parse(text); } catch { throw new SafeError('INVALID_UPSTREAM_RESPONSE', 'Zimbra did not return a JSON SOAP response.'); }
       if (result?.Body?.Fault) {
         const code = faultCode(result.Body.Fault);
-        throw new SafeError(code, code === 'account.AUTH_FAILED' ? 'Mailbox authentication failed.' : 'Zimbra rejected the read request.');
+        throw new SafeError(code, code === 'account.AUTH_FAILED' ? 'Mailbox authentication failed.' : 'Zimbra rejected the request.');
       }
       if (!response.ok) throw new SafeError('UPSTREAM_HTTP_ERROR', 'Zimbra returned an HTTP error.');
       const data = result?.Body?.[name.replace(/Request$/, 'Response')];
@@ -136,13 +139,38 @@ export class ZimbraReader {
     } finally { this.#token = undefined; }
   }
 
+  async #write(name, params, change) {
+    if (!this.#writeEnabled) throw new SafeError('WRITE_DISABLED', 'Mailbox writes are disabled by the owner.');
+    if (!ALLOWED_WRITES.has(name)) throw new SafeError('OPERATION_NOT_ALLOWED', 'Unsupported write operation.');
+    try {
+      await this.#authenticate();
+      // Never retry a mutation, including after an expired token. A transport or
+      // malformed-response failure may occur after the server committed it.
+      try { return await this.#send(name, MAIL, params, this.#token, change); }
+      catch (error) {
+        if (RETRY_AUTH.has(error.code) || ['mail.MODIFY_CONFLICT', 'mail.ALREADY_EXISTS', 'mail.NO_SUCH_TAG', 'service.PERM_DENIED', 'service.INVALID_REQUEST', 'mail.NO_SUCH_MSG', 'mail.NO_SUCH_FOLDER'].includes(error.code)) throw error;
+        throw new SafeError('WRITE_OUTCOME_UNKNOWN', 'The write may have completed. Do not repeat it automatically. Check the mailbox before deciding what to do next.');
+      }
+    } finally { this.#token = undefined; }
+  }
+
+  sendMessage(message, sendUid) { return this.#write('SendMsgRequest', { m: message, suid: sendUid }); }
+  saveDraft(message, expectedModseq) { return this.#write('SaveDraftRequest', { m: message, wantModSeq: true }, expectedModseq === undefined ? undefined : { token: expectedModseq, type: 'mod' }); }
+  moveMessages(ids, folderId) { return this.#write('MsgActionRequest', { action: { id: ids.join(','), op: 'move', l: folderId } }); }
+  setRead(ids, read) { return this.#write('MsgActionRequest', { action: { id: ids.join(','), op: read ? 'read' : '!read' } }); }
+  setFlag(ids, flagged) { return this.#write('MsgActionRequest', { action: { id: ids.join(','), op: flagged ? 'flag' : '!flag' } }); }
+  setTag(ids, tagId, add) { return this.#write('MsgActionRequest', { action: { id: ids.join(','), op: add ? 'tag' : '!tag', t: tagId } }); }
+  createFolder(name, parentId) { return this.#write('CreateFolderRequest', { folder: { name, l: parentId, view: 'message' } }); }
+  createTag(name, color) { return this.#write('CreateTagRequest', { tag: { name, ...(color === undefined ? {} : { color }) } }); }
+
   search(query, limit, offset) {
     return this.#read('SearchRequest', { query, types: 'message',
       limit, offset, sortBy: 'dateDesc', fetch: 'none', read: false, html: false });
   }
   message(id) {
-    return this.#read('GetMsgRequest', { m: { id, read: false, html: false, neuter: true, max: 100000, needExp: true } });
+    return this.#read('GetMsgRequest', { m: { id, read: false, html: false, neuter: true, wantModSeq: true, max: 100000, needExp: true } });
   }
+  folder(id) { return this.#read('GetFolderRequest', { folder: { id }, tr: false, needGranteeName: false }); }
   folders(path) { return this.#read('GetFolderRequest', { folder: { path }, tr: false, needGranteeName: false }); }
   tags() { return this.#read('GetTagRequest'); }
 }
