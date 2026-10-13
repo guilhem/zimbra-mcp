@@ -140,7 +140,7 @@ test('workerd: draft update carries server-enforced modification sequence', asyn
     if (Body.AuthRequest) return Response.json(auth);
     if (Body.GetMsgRequest) {
       assert.equal(Body.GetMsgRequest.m.wantModSeq, true); assert.equal(Body.GetMsgRequest.m.read, false);
-      return Response.json({ Body: { GetMsgResponse: { m: [{ id: '42', f: 'd', ms: '9', mp: [{ ct: 'text/plain' }] }] } } });
+      return Response.json({ Body: { GetMsgResponse: { m: [{ id: '42', f: 'd', ms: '9', mp: [{ ct: 'text/plain', content: 'Draft body' }] }] } } });
     }
     assert.deepEqual(Header.context.change, { token: '9', type: 'mod' });
     assert.equal(Body.SaveDraftRequest.m.id, '42');

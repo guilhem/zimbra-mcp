@@ -65,6 +65,28 @@ test('send transmits only exact explicit recipients and plain content with manda
   assert.doesNotMatch(JSON.stringify(r), /WRITE_TEST_TOKEN|WRITE_TEST_PASSWORD/);
 });
 
+test('successful sends without a saved copy need no message ID and still reserve the UUID', async () => {
+  for (const m of [{}, [{}]]) {
+    const a = send(); const q = queue(auth, soap('SendMsg', { m }));
+    const r = await invoke('zimbra_send_message', a, q);
+    assert.equal(r.result.isError, false);
+    assert.deepEqual(r.result.structuredContent, { completed: true, send_uid: a.send_uid });
+    assert.deepEqual(operation(q), ['AuthRequest', 'SendMsgRequest']);
+    const unused = queue(); errorCode(await invoke('zimbra_send_message', a, unused), 'SEND_UID_REUSED');
+    assert.equal(unused.calls.length, 0);
+  }
+});
+
+test('missing or malformed send messages and ID-less drafts remain ambiguous', async () => {
+  for (const m of [undefined, null, [], '', 'invalid', 1]) {
+    const q = queue(auth, soap('SendMsg', { m }));
+    errorCode(await invoke('zimbra_send_message', send(), q), 'WRITE_OUTCOME_UNKNOWN');
+    assert.equal(q.calls.length, 2);
+  }
+  const q = queue(auth, soap('SaveDraft', { m: [{}] }));
+  errorCode(await invoke('zimbra_save_draft', compose(), q), 'WRITE_OUTCOME_UNKNOWN');
+});
+
 test('reply reads original without marking read and never infers recipients', async () => {
   const a = { ...send(), to: ['explicit@example.org'], cc: [], bcc: [], reply_to_message_id: '42' };
   const q = queue(auth, original({ e: [{ a: 'unrequested@example.org', t: 'f' }] }), auth, soap('SendMsg', { m: [{ id: '82' }] }));
@@ -114,6 +136,26 @@ test('draft update verifies ID, draft flag, revision, and MIME content before re
   for (const [m, code] of [[{ id: '43' }, 'MESSAGE_NOT_FOUND'], [{ f: '' }, 'NOT_A_DRAFT'], [{ ms: '8' }, 'DRAFT_CHANGED'],
     [{ mp: [{ ct: 'text/html' }] }, 'DRAFT_CONTENT_UNSUPPORTED'], [{ mp: [{ ct: 'text/plain', filename: 'attachment.txt' }] }, 'DRAFT_CONTENT_UNSUPPORTED']]) {
     const bad = queue(auth, draft(m)); errorCode(await invoke('zimbra_save_draft', args, bad), code); assert.equal(bad.calls.length, 2);
+  }
+});
+
+test('draft replacement refuses any plain part whose content was not returned', async () => {
+  for (const content of [undefined, null, {}, 1]) {
+    const incomplete = { mp: [{ ct: 'multipart/alternative', mp: [
+      { ct: 'text/plain', content: 'Visible body' }, { ct: 'text/plain', s: 100, content },
+    ] }] };
+    const q = queue(auth, draft(incomplete), auth, soap('SaveDraft', { m: [{ id: '42' }] }));
+    errorCode(await invoke('zimbra_save_draft', { ...compose(), draft_id: '42', expected_modseq: '7' }, q), 'DRAFT_CONTENT_UNSUPPORTED');
+    assert.deepEqual(operation(q), ['AuthRequest', 'GetMsgRequest']);
+  }
+});
+
+test('draft replacement accepts complete plain text including explicit empty content', async () => {
+  for (const content of ['', 'Body', { _content: '' }, { _content: 'Body' }]) {
+    const q = queue(auth, draft({ mp: [{ ct: 'text/plain', content }] }), auth, soap('SaveDraft', { m: [{ id: '42' }] }));
+    const r = await invoke('zimbra_save_draft', { ...compose(), draft_id: '42', expected_modseq: '7' }, q);
+    assert.equal(r.result.isError, false);
+    assert.deepEqual(operation(q), ['AuthRequest', 'GetMsgRequest', 'AuthRequest', 'SaveDraftRequest']);
   }
 });
 
@@ -229,10 +271,11 @@ test('draft replacement refuses metadata and MIME content it cannot preserve', a
     { mp: [{ ct: 'text/plain', truncated: true }] },
     { mp: [{ ct: 'multipart/mixed', mp: [{ ct: 'text/plain', content: 'Body' }, { ct: 'image/png', filename: 'image.png' }] }] },
     { e: [{ t: 'r', a: 'reply@example.org' }] }, { e: [{ t: 's', a: 'sender@example.org' }] },
+    { deliveryReport: false, e: [{ t: 'n', a: 'receipt@example.org' }] }, { f: 'd!' }, { f: 'd?' },
     { e: [{ t: 'f', a: 'alternate@example.org' }] },
   ];
   for (const metadata of cases) {
-    const q = queue(auth, draft(metadata)); const r = await invoke('zimbra_save_draft', { ...compose(), draft_id: '42', expected_modseq: '7' }, q);
+    const q = queue(auth, draft(metadata), auth, soap('SaveDraft', { m: [{ id: '42' }] })); const r = await invoke('zimbra_save_draft', { ...compose(), draft_id: '42', expected_modseq: '7' }, q);
     errorCode(r, 'DRAFT_CONTENT_UNSUPPORTED'); assert.deepEqual(operation(q), ['AuthRequest', 'GetMsgRequest']);
   }
 });

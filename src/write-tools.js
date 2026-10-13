@@ -16,7 +16,7 @@ const tool = (name, description, properties, required, destructive = true, idemp
 const sendUid = { type: 'string', pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', minLength: 36, maxLength: 36, description: 'Fresh UUID v4 for this exact authorized send. Never reuse for different content. A timeout is ambiguous: inspect Sent before any further action; never automatically retry.' };
 export const WRITE_TOOLS = Object.freeze([
   tool('zimbra_send_message', 'Send one authorized plain-text email, or reply to a specific original message. Explicit To/Cc/Bcc arrays and full content are required; never infer reply recipients. reply_to_message_id adds original threading. No automatic retry. A send can have irreversible consequences.', { ...compose, send_uid: sendUid, reply_to_message_id: id }, ['to', 'cc', 'bcc', 'subject', 'body', 'send_uid']),
-  tool('zimbra_save_draft', 'Create a plain-text draft, or replace a draft using draft_id and expected_modseq from get_message. Replacement requires a current complete plain-text draft, rejects concurrent changes atomically, and refuses HTML, attachments, reply/forward, scheduled, receipt-request or alternate-identity metadata. Never sends.', { ...compose, draft_id: id, expected_modseq: { type: 'string', minLength: 1, maxLength: 20, pattern: '^[0-9]+$' } }, ['to', 'cc', 'bcc', 'subject', 'body']),
+  tool('zimbra_save_draft', 'Create a plain-text draft, or replace a draft using draft_id and expected_modseq from get_message. Replacement requires a current complete plain-text draft, rejects concurrent changes atomically, and refuses HTML, attachments, reply/forward, scheduled, receipt-request, non-default priority or alternate-identity metadata. Never sends.', { ...compose, draft_id: id, expected_modseq: { type: 'string', minLength: 1, maxLength: 20, pattern: '^[0-9]+$' } }, ['to', 'cc', 'bcc', 'subject', 'body']),
   tool('zimbra_delete_draft', 'Move one verified draft to Trash. Recoverable subject to server retention; no permanent purge. Requires the exact authorized draft ID.', { draft_id: id }, ['draft_id']),
   tool('zimbra_move_messages', 'Move authorized messages to an explicit existing mail folder ID. For archive, first identify or create the intended Archive folder and pass its ID; there is no assumed archive destination. No folder deletion.', { ids, folder_id: id }, ['ids', 'folder_id'], true, true),
   tool('zimbra_trash_messages', 'Move authorized messages to Trash, subject to server retention. Refuses messages already in Trash so repeating the operation cannot become permanent deletion. No purge.', { ids }, ['ids'], true, true),
@@ -65,9 +65,10 @@ function requirePlainDraft(m, env) {
   // Rebuilding a draft must not silently cancel scheduled sending, discard reply
   // threading or switch a delegated identity. GetMsg exposes these draft fields.
   for (const key of ['origid', 'rt', 'idnt', 'forAcct', 'irt']) if (plain(m[key]) != null && String(plain(m[key])) !== '') unsupported();
+  if (/[!?]/.test(String(m.f ?? ''))) unsupported();
   if ((m.autoSendTime != null && String(m.autoSendTime) !== '0') || [true, 1, '1', 'true'].includes(m.deliveryReport) || m.truncated) unsupported();
   for (const e of list(m.e)) {
-    if (['r', 's'].includes(e.t) || (e.t === 'f' && String(e.a).toLowerCase() !== String(env.ZIMBRA_USER).toLowerCase())) unsupported();
+    if (['r', 's', 'n'].includes(e.t) || (e.t === 'f' && String(e.a).toLowerCase() !== String(env.ZIMBRA_USER).toLowerCase())) unsupported();
   }
   if (!list(m.mp).length) unsupported();
   let count = 0; let plainParts = 0;
@@ -75,7 +76,10 @@ function requirePlainDraft(m, env) {
     if (!p || typeof p !== 'object' || p.truncated || depth > 15 || ++count > 200 || p.filename || p.cd === 'attachment' || !['text/plain', 'multipart/mixed', 'multipart/alternative'].includes(p.ct)) {
       throw new SafeError('DRAFT_CONTENT_UNSUPPORTED', 'This draft contains content that cannot safely be replaced by this plain-text tool. Edit it in Zimbra.');
     }
-    if (p.ct === 'text/plain') plainParts++;
+    if (p.ct === 'text/plain') {
+      if (typeof plain(p.content) !== 'string') unsupported();
+      plainParts++;
+    }
     for (const child of list(p.mp)) visit(child, depth + 1);
   }
   for (const part of list(m.mp)) visit(part);
@@ -142,7 +146,12 @@ export async function callWriteTool(name, args, env, fetchImpl) {
         m.origid = a.reply_to_message_id; m.rt = 'r'; m.irt = { _content: mid };
       }
       await reserveSend(env, a.send_uid);
-      result = changed(await client.sendMessage(m, a.send_uid), 'm', { send_uid: a.send_uid });
+      const data = await client.sendMessage(m, a.send_uid);
+      const sent = first(data.m);
+      // Zimbra returns an empty message when the account does not save sent mail.
+      result = sent && typeof sent === 'object' && !Array.isArray(sent) && sent.id == null
+        ? { completed: true, send_uid: a.send_uid }
+        : changed(data, 'm', { send_uid: a.send_uid });
       break;
     }
     case 'zimbra_save_draft': {

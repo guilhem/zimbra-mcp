@@ -22,7 +22,7 @@ Review and test the following before activation:
 - Four tools with writes absent/false/invalid; fourteen with exact `true`. Disabled write calls must make no mutating SOAP request
 - Owner allowlist rejection for missing identity, another identity and service-only requests; both configured identity fields must match
 - Explicit send/reply recipients, full plain-text content, UUID v4 validation, duplicate-send defense and no automatic retry after timeout, malformed response or authentication failure
-- Draft creation and guarded replacement, rejecting stale/concurrently modified drafts, non-drafts, reply/forward/delegated/alternate identity metadata, scheduled sending, delivery receipt settings, HTML, attachments and missing/text-free/unknown/truncated MIME. Complex drafts must be edited in Zimbra
+- Draft creation and guarded replacement, rejecting stale/concurrently modified drafts, non-drafts, reply/forward/delegated/alternate identity metadata, scheduled sending, delivery/read receipt settings, non-default priority, HTML, attachments, plain-text parts whose content was not returned and missing/text-free/unknown/truncated MIME. Complex drafts must be edited in Zimbra
 - All-target preflight before recoverable deletion, rejecting already-trashed messages; deletion uses only move to folder `3`, never purge
 - Explicit folder IDs for moves/archive, preservation of other tags, bounded batch operations, read/flag changes, folder/tag creation
 - Unread preservation for read tools, inert HTML reads, controlled error text, request-size bounds, endpoint pinning and credential redaction
@@ -50,7 +50,7 @@ Use owner-approved synthetic messages, drafts, folders and tags. Record only non
 - Change and restore synthetic read, flag and tag states; verify unrelated tags remain intact
 - Create an approved test folder and move a synthetic message into it and back using verified folder IDs
 - Move an approved test message/draft into Trash, verify its folder and reject a repeat Trash call. Restore only with separate authorization when required; do not purge or delete test folders using this release
-- Test send/reply only after approval of the exact controlled recipient, content and purpose. Use a fresh UUID per authorized send, inspect Sent and confirm receipt at the controlled destination. Never send to a real correspondent merely to test the connector
+- Test send/reply only after approval of the exact controlled recipient, content and purpose. Use a fresh UUID per authorized send; inspect Sent only if Zimbra retains saved copies, and always confirm receipt at the controlled destination. A successful `SendMsg` response may have no saved-message ID; `completed=true` confirms the send response, not recipient delivery. Never send to a real correspondent merely to test the connector
 - An ambiguous result stops that mutation's test sequence: inspect actual state, report uncertainty and obtain any needed new authorization before another attempt. Never automatically retry, change UUIDs to bypass a refusal or claim exactly-once behavior
 
 If any safety or provider-compatibility check fails, return to read-only mode. Existing automated tests cannot substitute for these live checks.
